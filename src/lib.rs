@@ -2,6 +2,7 @@
 mod cpp_string;
 mod loader;
 mod aasset;
+mod jniopts;
 mod plthook;
 use std::{
     fs,
@@ -14,11 +15,13 @@ use atoi::FromRadix16;
 use plt_rs::DynamicLibrary;
 use tinypatscan::Pattern;
 
-const RPMC_PATTERNS: [Pattern; 8] = [
+const RPMC_PATTERNS: [Pattern; 9] = [
     // 1.26.60+ (exact - byte 9 = 0x67)
     Pattern::from_str("FF C3 07 D1 FD 7B 1A A9 FC 67 1B A9 F8 5F 1C A9 F6 57 1D A9 F4 4F 1E A9 FD 83 06 91 58 D0 3B D5 F4 03 02 AA F3 03 00 AA"),
     // 1.26.60+ (exact - byte 9 = 0x6F)
     Pattern::from_str("FF C3 07 D1 FD 7B 1A A9 FC 6F 1B A9 F8 5F 1C A9 F6 57 1D A9 F4 4F 1E A9 FD 83 06 91 58 D0 3B D5 F4 03 02 AA F3 03 00 AA"),
+    // 1.26.60+ (wildcard fallback from PixelBoy mtbinloader2)
+    Pattern::from_str("?? ?? ?? D1 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? 91 ?? ?? ?? D5 F4 03 02 AA F3 03 00 AA"),
     // 1.26.60+ (wildcard fallback with canary store A8 83 1F F8)
     Pattern::from_str("?? ?? ?? D1 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? 91 ?? ?? ?? D5 F4 03 02 AA F3 03 00 AA ?? ?? ?? F9 A8 83 1F F8 ?? ?? ?? AA"),
     // v26.50
@@ -35,7 +38,7 @@ const RPMC_PATTERNS: [Pattern; 8] = [
 
 pub fn setup_logging() {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default().with_max_level(log::LevelFilter::Trace),
     );
 }
 
@@ -245,9 +248,10 @@ hook_fn! {
         use crate::LockResultExt;
         log::info!("rpm_ctor called (this={:?}, needs_init={})", this, needs_init);
         let result = call_original(this, unk1, unk2, needs_init);
+        log::info!("RPM pointer has been obtained");
         *crate::PACKM_OBJ.lock().ignore_poison() = Some(ResourcePackManager::wrap(this));
-        log::info!("rpm_ctor: captured ResourcePackManager pointer ({:?})", this);
-        log::info!("rpm_ctor done");
+        self_disable();
+        log::info!("rpm_ctor hook disabled, captured ResourcePackManager pointer ({:?})", this);
         result
     }
 }
