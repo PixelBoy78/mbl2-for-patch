@@ -14,7 +14,13 @@ use atoi::FromRadix16;
 use plt_rs::DynamicLibrary;
 use tinypatscan::Pattern;
 
-const RPMC_PATTERNS: [Pattern; 5] = [
+const RPMC_PATTERNS: [Pattern; 8] = [
+    // 1.26.60+ (exact - byte 9 = 0x67)
+    Pattern::from_str("FF C3 07 D1 FD 7B 1A A9 FC 67 1B A9 F8 5F 1C A9 F6 57 1D A9 F4 4F 1E A9 FD 83 06 91 58 D0 3B D5 F4 03 02 AA F3 03 00 AA"),
+    // 1.26.60+ (exact - byte 9 = 0x6F)
+    Pattern::from_str("FF C3 07 D1 FD 7B 1A A9 FC 6F 1B A9 F8 5F 1C A9 F6 57 1D A9 F4 4F 1E A9 FD 83 06 91 58 D0 3B D5 F4 03 02 AA F3 03 00 AA"),
+    // 1.26.60+ (wildcard fallback with canary store A8 83 1F F8)
+    Pattern::from_str("?? ?? ?? D1 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? 91 ?? ?? ?? D5 F4 03 02 AA F3 03 00 AA ?? ?? ?? F9 A8 83 1F F8 ?? ?? ?? AA"),
     // v26.50
     Pattern::from_str("?? ?? ?? D1 ?? ?? ?? A9 ?? ?? ?? F9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? A9 ?? ?? ?? 91 ?? ?? ?? D5 F6 03 03 2A F5 03 02 AA ?? ?? ?? F9 F3 03 00 AA"),
     // v26.40
@@ -39,10 +45,7 @@ fn safe_setup() {
     std::panic::set_hook(Box::new(|panic_info| {
         log::error!("Thread crashed: {}", panic_info);
     }));
-    // Run on a background thread so we don't block dlopen() / the UI thread.
-    // The pattern scan + PLT hooks finish in ~100-200ms, well before Minecraft
-    // starts loading shaders, so there is no practical race.
-    std::thread::spawn(main);
+    main();
 }
 
 fn main() {
@@ -103,7 +106,7 @@ fn parse_range(buf: &[u8]) -> Option<(&[u8], &[u8])> {
     let addr_range = fields.next()?;
     let perms = fields.next()?;
     let pathname = fields.next_back()?;
-    if perms.contains(&b'x') && pathname.ends_with(b"libminecraftpe.so") {
+    if perms.contains(&b'x') && (pathname.ends_with(b"libminecraftpe.so") || pathname.contains_str(b"libminecraftpe.so")) {
         return addr_range.split_once_str(b"-");
     }
     None
@@ -191,11 +194,9 @@ hook_fn! {
         use crate::LockResultExt;
         log::info!("rpm_ctor called (this={:?}, needs_init={})", this, needs_init);
         let result = call_original(this, unk1, unk2, needs_init);
-        if needs_init {
-            *crate::PACKM_OBJ.lock().ignore_poison() = Some(ResourcePackManager::wrap(this));
-            log::info!("rpm_ctor: captured new ResourcePackManager");
-        }
-        log::info!("rpm_ctor done (needs_init={})", needs_init);
+        *crate::PACKM_OBJ.lock().ignore_poison() = Some(ResourcePackManager::wrap(this));
+        log::info!("rpm_ctor: captured ResourcePackManager pointer ({:?})", this);
+        log::info!("rpm_ctor done");
         result
     }
 }
