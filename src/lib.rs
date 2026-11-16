@@ -65,6 +65,57 @@ fn main() {
     unsafe { rpm_ctor::hook_address(addr as *mut u8) };
     log::info!("Hooking AssetManager functions");
     hook_aasset();
+    log::info!("Checking for 4DSkin module");
+    load_4dskin_if_present();
+}
+
+/// Dynamically load and activate lib4DSkin.so if present in the APK's library directory.
+fn load_4dskin_if_present() {
+    let candidate_names = [
+        b"lib4DSkin.so\0".as_ptr() as *const libc::c_char,
+        b"lib4dskin.so\0".as_ptr() as *const libc::c_char,
+    ];
+
+    for &name in &candidate_names {
+        unsafe {
+            let handle = libc::dlopen(name, libc::RTLD_NOW | libc::RTLD_GLOBAL);
+            if handle.is_null() {
+                continue;
+            }
+            log::info!("Found 4DSkin library, initializing hooks");
+            let sym = libc::dlsym(handle, b"PLMod_Enable\0".as_ptr() as *const libc::c_char);
+            if sym.is_null() {
+                log::error!("PLMod_Enable symbol not found in 4DSkin library");
+                return;
+            }
+
+            // In lib4DSkin.so, PLMod_Enable export stub is at 0x45944.
+            // The mod state variable is at offset 0xd4958 in .bss.
+            // Setting state = 1 satisfies the check:
+            //   0x49220: LDR W8, [X19, #0x958]; CMP W8, #1; B.EQ 0x4923c;
+            let base = (sym as usize).wrapping_sub(0x45944);
+            let state_ptr = (base + 0xd4958) as *mut u32;
+            *state_ptr = 1;
+            log::info!("Set lib4DSkin state to 1 (LOADED)");
+
+            // Also patch 0x49220 with "B 0x4923c" (0x14000007) so the guard passes unconditionally
+            let patch_addr = (base + 0x49220) as *mut u32;
+            if let Ok(_guard) = region::protect_with_handle(
+                patch_addr as *const (),
+                4,
+                region::Protection::READ_WRITE_EXECUTE,
+            ) {
+                *patch_addr = 0x14000007;
+                log::info!("Patched lib4DSkin state guard instruction");
+            }
+
+            let enable_fn: extern "C" fn() -> bool = std::mem::transmute(sym);
+            let res = enable_fn();
+            log::info!("PLMod_Enable executed with result: {}", res);
+            return;
+        }
+    }
+    log::info!("lib4DSkin.so not present, skipping 4D skin activation");
 }
 
 // ── /proc/self/maps parsing ──────────────────────────────────────────────────
